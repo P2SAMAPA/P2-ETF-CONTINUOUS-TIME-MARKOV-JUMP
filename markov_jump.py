@@ -5,8 +5,6 @@ from sklearn.preprocessing import StandardScaler
 def markov_jump_intensity(returns, macro_df, high_vol_threshold=0.02):
     """
     Estimate jump intensity to high‑volatility state using macro covariates.
-    Uses logistic regression where target is 1 if |return| > threshold.
-    Returns predicted probability for the last macro observation.
     """
     # Align returns and macro
     common_idx = returns.index.intersection(macro_df.index)
@@ -14,22 +12,29 @@ def markov_jump_intensity(returns, macro_df, high_vol_threshold=0.02):
         return 0.0
     ret_aligned = returns.loc[common_idx]
     macro_aligned = macro_df.loc[common_idx]
-    # Drop any remaining NaN in macro
-    macro_aligned = macro_aligned.dropna()
-    ret_aligned = ret_aligned[macro_aligned.index]
-    if len(ret_aligned) < 10:
-        return 0.0
     # Binary target: 1 if absolute return > threshold
     y = (np.abs(ret_aligned) > high_vol_threshold).astype(int)
+    # Check if both classes present
+    if len(np.unique(y)) < 2:
+        # No positive examples: return low probability
+        return 0.0
+    # Check for any NaN in macro (should have been handled, but drop)
+    if macro_aligned.isna().any().any():
+        # Drop rows with NaN in macro
+        valid = ~macro_aligned.isna().any(axis=1)
+        macro_aligned = macro_aligned[valid]
+        y = y[valid]
+        if len(macro_aligned) < 10 or len(np.unique(y)) < 2:
+            return 0.0
     # Standardise macro
     scaler = StandardScaler()
     X = scaler.fit_transform(macro_aligned)
     # Fit logistic regression
     model = LogisticRegression(C=1.0, max_iter=1000)
     model.fit(X, y)
-    # Predict on last macro observation (ensure no NaN)
+    # Predict on last macro observation
     last_macro = macro_df.iloc[-1].values.reshape(1, -1)
-    # Remove any NaN in last_macro by imputing with mean? For simplicity, if any NaN, return 0
+    # Check last macro for NaN
     if np.any(np.isnan(last_macro)):
         return 0.0
     last_macro_scaled = scaler.transform(last_macro)
@@ -38,6 +43,6 @@ def markov_jump_intensity(returns, macro_df, high_vol_threshold=0.02):
 
 def continuous_time_markov_jump_score(returns, macro_df, high_vol_threshold=0.02):
     """Score = probability of entering high‑volatility state today given macro."""
-    if len(returns) < 5 or macro_df is None or macro_df.empty:
+    if len(returns) < 5 or macro_df is None or len(macro_df) < 5:
         return 0.0
     return markov_jump_intensity(returns, macro_df, high_vol_threshold)
